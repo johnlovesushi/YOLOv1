@@ -12,51 +12,33 @@ import shutil
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from datasets import load_dataset
-from hf_dataset import CustomImageNetDataset
-
+from imagenet_subset import ImageNetSubDataset
 
 
 log_dir = './log'
 writer = SummaryWriter(log_dir=log_dir)  # TensorBoard log directory
-num_epochs = 90
+num_epochs = 30
 batch_size = 16
 num_workers = 2
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-lr = 1e-3
+lr = 2e-05
 momentum = 0.9
 weight_decay = 1e-4
 best_accuracy = 0
 
-def train_and_val(hf_dataset = "pkr7098/imagenet2012-1k-subsampling-50"):
+def train_and_val():
     global best_accuracy 
     # print(torch.cuda.is_available())  # Should return True if CUDA is available
     # print(torch.cuda.current_device())  # Should show the current GPU device ID
     # print(torch.cuda.get_device_name(0))  # Should print the name of your GPU
     # print(device)
     # Dataset Loading
-    print('loading dataset...')
-    dataset = load_dataset(hf_dataset)
 
-    normalize = T.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-
-    train_transform = T.Compose([
-                                T.RandomResizedCrop(224),
-                                T.RandomHorizontalFlip(),
-                                T.ToTensor(),
-                                normalize,])
-    val_transform = T.Compose([
-                              T.Resize(256),
-                              T.CenterCrop(224),
-                              T.ToTensor(),
-                              normalize,])
-    train_dataset = CustomImageNetDataset(dataset['train'], transform=train_transform)
-    val_dataset = CustomImageNetDataset(dataset['test'], transform=val_transform)
+    train_dataset = ImageNetSubDataset(is_train= True)
+    val_dataset = ImageNetSubDataset(is_train= False)
 
     model = DarkNet(batch_norm=True, conv_only=False).to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr = lr,
-                            momentum=momentum,
-                            weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr = lr)
 
 
     # Optimizer, criterion, etc.
@@ -132,42 +114,43 @@ def train_and_val(hf_dataset = "pkr7098/imagenet2012-1k-subsampling-50"):
       print(f"Epoch [{epoch + 1}/{num_epochs}] completed. Average Loss: {epoch_loss / num_batches:.4f}\n")
 
       # Validation
-      model.eval()  # Set model to evaluation mode
-      running_val_loss = 0.0
-      val_correct = 0
-      val_total = 0
-      
-      with torch.no_grad():  # Disable gradient calculations for validation
-        for images, targets in val_loader:
-          images, targets = images.to(device), targets.to(device)
-          
-          outputs = model(images)  # Forward pass
-          loss = criterion(outputs, targets)  # Compute validation loss
-          running_val_loss += loss.item()
+      if epoch % 5 == 0:
+        model.eval()  # Set model to evaluation mode
+        running_val_loss = 0.0
+        val_correct = 0
+        val_total = 0
+        
+        with torch.no_grad():  # Disable gradient calculations for validation
+            for images, targets in val_loader:
+                images, targets = images.to(device), targets.to(device)
+                
+                outputs = model(images)  # Forward pass
+                loss = criterion(outputs, targets)  # Compute validation loss
+                running_val_loss += loss.item()
 
-          # Calculate accuracy
-          _, predicted = torch.max(outputs.data, 1)  # Get class with highest score
-          val_total += targets.size(0)
-          val_correct += (predicted == targets).sum().item()
+                # Calculate accuracy
+                _, predicted = torch.max(outputs.data, 1)  # Get class with highest score
+                val_total += targets.size(0)
+                val_correct += (predicted == targets).sum().item()
 
-      avg_val_loss = running_val_loss / len(val_loader)
-      val_accuracy = (val_correct / val_total) * 100
+        avg_val_loss = running_val_loss / len(val_loader)
+        val_accuracy = (val_correct / val_total) * 100
 
-      # Log validation metrics to TensorBoard
-      writer.add_scalar('Val/Loss', avg_val_loss, epoch)
-      writer.add_scalar('Val/Accuracy', val_accuracy, epoch)
-      print(f"Validation Loss: {avg_val_loss:.4f}, Accuracy: {val_accuracy:.2f}%\n")
+        # Log validation metrics to TensorBoard
+        writer.add_scalar('Val/Loss', avg_val_loss, epoch)
+        writer.add_scalar('Val/Accuracy', val_accuracy, epoch)
+        print(f"Validation Loss: {avg_val_loss:.4f}, Accuracy: {val_accuracy:.2f}%\n")
 
-      is_best = val_accuracy > best_accuracy
-      best_accuracy = max(val_accuracy, best_accuracy)
-      state = {
-            'epoch': epoch + 1,
-            'model_state_dict': model.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'best_accuracy': best_accuracy,
-            }
-      save_checkpoint(state, is_best, log_dir, filename='checkpoint.pth')
-    
+        is_best = val_accuracy > best_accuracy
+        best_accuracy = max(val_accuracy, best_accuracy)
+        state = {
+                'epoch': epoch + 1,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_accuracy': best_accuracy,
+                }
+        save_checkpoint(state, is_best, log_dir, filename='checkpoint.pth')
+        
     return
 
 
