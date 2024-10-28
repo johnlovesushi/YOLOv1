@@ -1,0 +1,72 @@
+label = {
+    'annotation': {
+        'folder': 'VOC2007',
+        'filename': '000470.jpg',
+        'source': {
+            'database': 'The VOC2007 Database',
+            'annotation': 'PASCAL VOC2007',
+            'image': 'flickr',
+            'flickrid': '296153084'
+        },
+        'owner': {
+            'flickrid': 'jimmythesuperstar',
+            'name': 'jimmy thesuperstar'
+        },
+        'size': {
+            'width': '500',
+            'height': '375',
+            'depth': '3'  # Depth is typically the number of channels (3 for RGB images)
+        },
+        'segmented': '0',  # '0' means no segmentation mask provided.
+        'object': [
+            {
+                'name': 'horse',
+                'pose': 'Right',
+                'truncated': '0',  # '0' means the object is not truncated
+                'difficult': '0',  # '0' means the object is not marked as difficult
+                'bndbox': {
+                    'xmin': '194',
+                    'ymin': '89',
+                    'xmax': '415',
+                    'ymax': '335'
+                }
+            },
+            {
+                'name': 'horse',
+                'pose': 'Unspecified',
+                'truncated': '1',  # '1' means the object is truncated
+                'difficult': '1',  # '1' means the object is marked as difficult
+                'bndbox': {
+                    'xmin': '160',
+                    'ymin': '92',
+                    'xmax': '328',
+                    'ymax': '312'
+                }
+            },
+            {
+                'name': 'horse',
+                'pose': 'Unspecified',
+                'truncated': '1',
+                'difficult': '1',
+                'bndbox': {
+                    'xmin': '443',
+                    'ymin': '130',
+                    'xmax': '500',
+                    'ymax': '270'
+                }
+            },
+            {
+                'name': 'person',
+                'pose': 'Unspecified',
+                'truncated': '1',
+                'difficult': '0',
+                'bndbox': {
+                    'xmin': '145',
+                    'ymin': '132',
+                    'xmax': '173',
+                    'ymax': '230'
+                }
+            }
+        ]
+    }
+}
