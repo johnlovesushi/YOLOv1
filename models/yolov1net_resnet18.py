@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
 import torch.nn.functional as F
-from darknet import DarkNet
 from torchsummary import summary
 
 

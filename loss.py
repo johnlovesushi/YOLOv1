@@ -2,14 +2,19 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from yolov1 import YOLOv1
+from models.yolov1net_resnet18 import YOLOv1_resnet18
 from torchsummary import summary
 import config
 import random
 from voc import VOCDataset
-import utils
-from darknet import DarkNet
+from utils import *
 from tqdm import tqdm
+from utils import mean_average_precision as mAP
+from utils import convert_yolo_pred_x1y1x2y2
+
+
+def collate_function(data):
+    return list(zip(*data))
 
 class Loss(nn.Module):
     
@@ -21,55 +26,10 @@ class Loss(nn.Module):
         self.lambda_coord = lambda_coord
         self.lambda_noobj = lambda_noobj
 
-    def compute_iou(self, p,a):
-        """
-        Args:
-            p: (Tensor) bounding bboxes, sized [N,S,S,B*2 + C]
-            a: (Tensor) bounding bboxes, sized [N,S,S,B*2 + C]
-        Returns:
-            (Tensor) IoU, sized [N, M].
-        """
-        p_tl, p_br = self.bbox_to_coords(p)          # (batch, S, S, B, 2)
-        a_tl, a_br = self.bbox_to_coords(a)
-        coords_join_size = (-1, -1, -1, config.B, config.B, 2) 
-
-        tl = torch.max(
-            p_tl.unsqueeze(4).expand(coords_join_size),  # (batch,S,S,B,1,2) -> (batch,S,S,B,2,2)
-            a_tl.unsqueeze(3).expand(coords_join_size)   # (batch, S,S,1,B,2) -> (batch, S,S,1,B,2)
-        )
-        br = torch.min(
-            p_br.unsqueeze(4).expand(coords_join_size),  # (batch,S,S,B,1,2) -> (batch,S,S,B,2,2)
-            a_br.unsqueeze(3).expand(coords_join_size)   # (batch, S,S,1,B,2) -> (batch, S,S,1,B,2)
-        )
-
-        intersection_sides = torch.clamp(br - tl, min=0.0)
-        intersection = intersection_sides[..., 0] \
-                    * intersection_sides[..., 1]       # (batch, S, S, B, B)
-
-
-        p_area = self.bbox_attr(p, 2) * self.bbox_attr(p, 3)  # (batch,S,S,B)
-        a_area = self.bbox_attr(a, 2) * self.bbox_attr(a, 3)  # (batch,S,S,B)
-
-        p_area = p_area.unsqueeze(4).expand_as(intersection)     # (batch,S,S,B) -> (batch,S,S,B,1) ->  (batch,S,S,B,B) 
-        a_area = a_area.unsqueeze(3).expand_as(intersection)     # (batch,S,S,B) -> (batch,S,S,1,B) ->  (batch,S,S,B,B) 
-
-        union = p_area + a_area - intersection
-        
-        # catch division-by-zero
-        zero_unions = (union == 0.0)
-        union[zero_unions] = config.EPSILON
-        intersection[zero_unions] = 0.0
-        iou = intersection/ union
-        
-        return iou
     def mse_loss(self,a, b):
         flattened_a = torch.flatten(a, end_dim=-2)
         flattened_b = torch.flatten(b, end_dim=-2).expand_as(flattened_a)
-        return F.mse_loss(
-            flattened_a,
-            flattened_b,
-            reduction='sum'
-        )
+        return F.mse_loss(flattened_a,flattened_b,reduction='sum')
 
     def forward(self, p, a):
         """ Compute loss for YOLO training.
@@ -82,11 +42,11 @@ class Loss(nn.Module):
         S,B,C = self.S, self.B, self.C
         # loss includes 5 sub-losses: 
         # 1. re-construe to [N,S,S,B,5]
-        iou = self.compute_iou(p,a) # (batch,S,S,B,B) 
+        iou = compute_iou(p,a) # (batch,S,S,B,B) 
         max_iou = torch.max(iou, dim = -1)[0]   # (batch,S,S,B) 
 
-        bbox_mask = self.bbox_attr(a, 4) > 0.0  # (batch,S,S,B)
-        p_template = self.bbox_attr(p, 4) > 0.0 # (batch,S,S,B)
+        bbox_mask = bbox_attr(a, 4) > 0.0  # (batch,S,S,B)
+        p_template = bbox_attr(p, 4) > 0.0 # (batch,S,S,B)
 
         obj_i = bbox_mask[..., 0:1] # (batch, S,S,1)
         responsible = torch.zeros_like(p_template).scatter_(       # (batch, S, S, B)
@@ -98,19 +58,19 @@ class Loss(nn.Module):
         obj_ij = obj_i * responsible        # 1 if object exists AND bbox is responsible
         noobj_ij = ~obj_ij                  # Otherwise, confidence should be 0
 
-        loss_x = self.mse_loss(obj_ij * self.bbox_attr(a,0), obj_ij * self.bbox_attr(p,0) )
-        loss_y = self.mse_loss(obj_ij * self.bbox_attr(a,1), obj_ij * self.bbox_attr(p,1) )
-        loss_w = self.mse_loss(obj_ij * torch.sign(self.bbox_attr(a,2)) * (self.bbox_attr(a,2)+config.EPSILON).sqrt(), 
-                               obj_ij * torch.sign(self.bbox_attr(p,2)) * (self.bbox_attr(p,2)+config.EPSILON).sqrt())
-        loss_h = self.mse_loss(obj_ij * torch.sign(self.bbox_attr(a,3)) * (self.bbox_attr(a,3)+config.EPSILON).sqrt(), 
-                               obj_ij * torch.sign(self.bbox_attr(p,3)) * (self.bbox_attr(p,3)+config.EPSILON).sqrt())
+        loss_x = self.mse_loss(obj_ij * bbox_attr(a,0), obj_ij * bbox_attr(p,0) )
+        loss_y = self.mse_loss(obj_ij * bbox_attr(a,1), obj_ij * bbox_attr(p,1) )
+        loss_w = self.mse_loss(obj_ij * torch.sign(bbox_attr(a,2)) * (bbox_attr(a,2)+config.EPSILON).sqrt(), 
+                               obj_ij * torch.sign(bbox_attr(p,2)) * (bbox_attr(p,2)+config.EPSILON).sqrt())
+        loss_h = self.mse_loss(obj_ij * torch.sign(bbox_attr(a,3)) * (bbox_attr(a,3)+config.EPSILON).sqrt(), 
+                               obj_ij * torch.sign(bbox_attr(p,3)) * (bbox_attr(p,3)+config.EPSILON).sqrt())
 
         #
 
-        loss_conf_obj = self.mse_loss(obj_ij * obj_ij * torch.ones_like(max_iou),obj_ij * self.bbox_attr(p,4))
-        loss_conf_no_obj = self.mse_loss(noobj_ij * obj_ij * torch.ones_like(max_iou),noobj_ij * self.bbox_attr(p,4))
+        loss_conf_obj = self.mse_loss(obj_ij * obj_ij * torch.ones_like(max_iou),obj_ij * bbox_attr(p,4))
+        loss_conf_no_obj = self.mse_loss(noobj_ij * obj_ij * torch.ones_like(max_iou),noobj_ij * bbox_attr(p,4))
 
-        classification_loss = self.mse_loss(obj_i * p[...,5 * config.B: ] , obj_i * a[...,5 * config.B: ])
+        classification_loss = self.mse_loss(obj_i * p[...,: config.C] , obj_i * a[...,: config.C])
 
 
         total_loss = (
@@ -120,27 +80,6 @@ class Loss(nn.Module):
             classification_loss
         )
         return total_loss
-
-    def bbox_to_coords(self,t):
-        """Changes format of bounding boxes from [x, y, width, height] to ([x1, y1], [x2, y2])."""
-
-        width = self.bbox_attr(t, 2)
-        x = self.bbox_attr(t, 0)
-        x1 = x - width / 2.0
-        x2 = x + width / 2.0
-
-        height = self.bbox_attr(t, 3)
-        y = self.bbox_attr(t, 1)
-        y1 = y - height / 2.0
-        y2 = y + height / 2.0
-
-        return torch.stack((x1, y1), dim=4), torch.stack((x2, y2), dim=4)
-
-    def bbox_attr(self,data, i):
-        """Returns the Ith attribute of each bounding box in data."""
-
-        attr_start = config.C + i
-        return data[..., attr_start::5]
 
 def test_compute_iou():
     # Example test
@@ -199,7 +138,7 @@ def test_loss_function():
     momentum = 0.9
     weight_decay = 5.0e-4
     dataset = VOCDataset(is_train = True, normalize = True)
-    subset_size = 100  # taking 10 samples
+    subset_size = 20  # taking 10 samples
     dataset_size = len(dataset)
     # Randomly select indices for the subset
     subset_indices = random.sample(range(dataset_size), subset_size)
@@ -209,31 +148,61 @@ def test_loss_function():
     #     obj_classes = utils.load_class_array()
     #     file = "./output_images"
     #     utils.plot_boxes(data, target,label, obj_classes, max_overlap=float('inf'), file = file)
-    darknet = DarkNet(conv_only=True, batch_norm=True, init_weight=True)
-    yolo = YOLOv1(darknet.features).to('cpu')
-    dataloader = DataLoader(subset, batch_size=4, shuffle=True,collate_fn=custom_collate_fn)
-    criterion = Loss(feature_size=yolo.num_grids)
+    #darknet = DarkNet(conv_only=True, batch_norm=True, init_weight=True)
+    yolo = YOLOv1_resnet18().to('cpu')
+    dataloader = DataLoader(subset, batch_size=4, shuffle=True) #,collate_fn=custom_collate_fn
+    # for batch in dataloader:
+    #     data, target, original_data = batch
+    #     # Now you can work with each batch element
+    #     print("Data shape:", data.shape)  # Transformed images after augmentations
+    #     print("Target:", target.shape)          # Encoded targets for model
+    #     print("Original Data shape:", original_data.shape)  # Untransformed images
+    #     break  # Remove this break in actual training loop
+    # criterion = Loss(feature_size=yolo.num_grids)
     optimizer = torch.optim.SGD(yolo.parameters(), lr=init_lr, momentum=momentum, weight_decay=weight_decay)
+    torch.set_printoptions(profile="full")
 
-    # for image in subset:
-    #     print(image.shape)
-    # for images,targets in dataloader:
-    #     print(images.shape)
+    for data,target,_ in subset:
+        obj_classes = load_class_array()
+        file = "./output_images"
+        pred = yolo(data.unsqueeze(0))
+        # plot_boxes(data, target,label, obj_classes, max_overlap=float('inf'), file = file)        
+        # print(target)
+        # true_bboxes = convert_yolo_pred_x1y1x2y2(target.unsqueeze(0), S = 7,B=2, C=20)       # [batch_size, S*S]
+        # print(true_bboxes)
+        # bboxes = convert_yolo_pred_x1y1x2y2(predicted, S = 7,B=2, C=20)
+        # print('true_bboxes',true_bboxes)
+        # print(bboxes)
+        # print(len(bboxes), len(bboxes[0]))
+        # #for training data
+        mAP(pred,target,conf_threshold = 0.3,iou_threshold = 0.3)
+
+    pred_bbox, target_bbox = get_bboxes(dataloader, yolo, iou_threshold = 0.5, 
+                                          threshold = 0.4)
+    
     for epoch in range(EPOCH):
+        train_mAP_val = mAP(pred_bbox, target_bbox, iou_threshold = 0.5, boxformat="midpoints")
         yolo.train()  # Set the model to training mode for each epoch
         epoch_loss = 0.0  # Initialize the loss for the epoch
         total_train = 0
         correct_train = 0
         num_batches = len(dataloader)  # Get the number of batches
 
-        with tqdm(total=num_batches, desc=f"Epoch {epoch + 1}/{EPOCH}", unit="batch") as pbar:
-            for batch_idx, (images,targets) in enumerate(dataloader):
 
+        with tqdm(total=num_batches, desc=f"Epoch {epoch + 1}/{EPOCH}", unit="batch") as pbar:
+            for batch_idx, batch in enumerate(dataloader):
+                images, targets, _,_ = batch
                 images, targets = images.to('cpu'), targets.to('cpu')
                 # print(f"Input type: {images.dtype}, shape: {images.shape}")
                 # print(f"Input type: {targets.dtype}, shape: {targets.shape}")
                 predicted = yolo(images)  # Forward pass through the model
-
+                print(images)
+                true_bboxes = cellboxes_to_boxes(targets)       # [batch_size, S*S]
+                bboxes = cellboxes_to_boxes(predicted)
+                print('true_bboxes',true_bboxes)
+                print(len(true_bboxes), len(true_bboxes[0]), )
+                print(bboxes)
+                print(len(bboxes), len(bboxes[0]))
                 # print(f"Outputs shape: {outputs.shape}")  # Check the shape of outputs
                 # print(f"Targets shape: {targets.shape}")  # Check the shape of targets
 
@@ -241,8 +210,21 @@ def test_loss_function():
                 optimizer.zero_grad()  # Clear the gradients
                 loss.backward()  # Backpropagation
                 optimizer.step()  # Update weights
-
+                convert_cellboxes(predicted)
                 epoch_loss += loss.item()  # Accumulate the loss
+                pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
+                pbar.update(1)  # Update the progress bar by 1 batch
+
+                # Calculate train loss
+        avg_train_loss = epoch_loss / num_batches
+
+        # Log training metrics to TensorBoard
+        #writer.add_scalar('Train/Loss', avg_train_loss, epoch)
+
+      # After each epoch, print summary
+        print(f"Epoch [{epoch + 1}/{EPOCH}] completed. Average Loss: {epoch_loss / num_batches:.4f}, mAP: {train_mAP_val}\n")
+
+
 
 if __name__ == '__main__':
    #test_compute_iou()
