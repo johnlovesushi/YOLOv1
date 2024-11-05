@@ -8,9 +8,9 @@ from tqdm import tqdm
 from torchvision.datasets.voc import VOCDetection
 from torch.utils.data import Dataset,  DataLoader
 from models.yolov1net_resnet18 import YOLOv1_resnet18
-from mean_average_precision import MetricBuilder
-import albumentations as albu
-import numpy as np
+
+
+
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 class VOCDataset(Dataset):
 
@@ -24,7 +24,7 @@ class VOCDataset(Dataset):
             download = True,
             transform = T.Compose([
                 T.Resize(config.IMAGE_SIZE),
-                T.ToTensor()
+                T.ToTensor() 
             ])
         )
 
@@ -96,7 +96,7 @@ class VOCDataset(Dataset):
     def _encode(self, data, label,scale,x_shift, y_shift):
 
         boxes = {}
-        class_names = {}                    # Track what class each grid cell has been assigned to
+        class_names = {}                # Track what class each grid cell has been assigned to
         N = 5 * config.B + config.C     # 5 numbers per bbox, then one-hot encoding of label
 
         grid_size_x = data.shape[2]/config.S
@@ -119,7 +119,6 @@ class VOCDataset(Dataset):
                 y_max = utils.scale_bbox_coord(y_max, half_height, scale) + y_shift
             # Keep the record of the adjusted_bboes coord
             adjusted_bboxes.append([x_min,y_min,x_max,y_max])
-        
         
         # Process bounding boxes into the SxSx(5*B+C) ground truth tensor
             # Calculate the position of center of bounding box
@@ -153,90 +152,8 @@ class VOCDataset(Dataset):
                         bbox_start = 5 * bbox_index + config.C
                         target[row, col, bbox_start:] = torch.tensor(bbox_truth).repeat(config.B - bbox_index)
                         boxes[cell] = bbox_index + 1
-        adjusted_bboxes_tensor = torch.as_tensor(adjusted_bboxes)
+        adjusted_bboxes_tensor = torch.as_tensor(adjusted_bboxes, dtype = torch.float32)
         return target,adjusted_bboxes_tensor
 
     def __len__(self):
         return len(self.dataset)
-def collate_function(data):
-    return list(zip(*data))
-
-
-def test():
-    from torch.utils.data import Subset
-    import pprint
-    torch.set_printoptions(profile="full")
-    random.seed(10)
-
-    dataset = VOCDataset(is_train = True, normalize = True)
-    subset_size = 20  # taking 10 samples
-    dataset_size = len(dataset)
-    # Randomly select indices for the subset
-    subset_indices = random.sample(range(dataset_size), subset_size)
-    subset = Subset(dataset, subset_indices)
-    # batch_size can only be 1 when its evaluate mAP
-    dataloader =  DataLoader(subset, shuffle=True, batch_size = 1, collate_fn=collate_function)
-    yolo = YOLOv1_resnet18().to(device)
-    for idx, (data,targets, filename) in enumerate(dataloader):
-        #print(data)
-        yolo_targets = torch.cat([
-            target['yolo_targets'].unsqueeze(0).float().to(device)
-            for target in targets], dim=0)
-        im = torch.cat([im.unsqueeze(0).float().to(device) for im in data], dim=0)
-        #target_bboxes = targets['bboxes'].to(device)[0]
-        # bboxes = torch.cat([
-        #     target['bboxes'].unsqueeze(0).float().to(device)
-        #     for target in targets], dim=0)
-        labels = torch.cat([
-            target['labels'].unsqueeze(0).float().to(device)
-            for target in targets], dim=0)
-        #difficult = targets['difficult']
-        difficult = torch.cat([
-            target['difficult'].unsqueeze(0).float().to(device)
-            for target in targets], dim=0)
-        # bboxes = targets['bboxes'].float().to(device)[0]
-        # labels = targets['labels'].long().to(device)[0]
-        # difficult = targets['difficult'].long().to(device)[0]
-        pred = yolo(im)
-        bboxes = targets[0]['bboxes'].float().to(device)
-        labels = targets[0]['labels'].float().to(device)
-        difficult = targets[0]['difficult'].float().to(device)
-        adjusted_bboxes = targets[0]['adjusted_bboxes'].float().to(device)
-        print(f"Batch {idx + 1}:")
-        print("bboxes", bboxes)
-        print('adjusted_bboxes', adjusted_bboxes)
-        print("labels", labels)
-        print("difficult", difficult)
-        print("filename", filename)
-
-        # print("Data:", data)  # Display shape of data tensor
-        # print("Targets:", targets)  # Display targets dictionary
-        # print("label:", bboxes)  # Display filenames
-        # print("bboxes",labels)
-        # Print each component in the targets dictionary to check values
-        pred = utils.mean_average_precision(pred,conf_threshold = 0.3,iou_threshold = 0.3)
-        #print("pred",pred)
-        tgs = utils.convert_target_to_certain_format(adjusted_bboxes, labels,difficult)
-        #print("tgs", tgs)
-
-        #print(MetricBuilder.get_metrics_list())
-        metric_fn = MetricBuilder.build_evaluation_metric("map_2d", async_mode=True, num_classes=config.C)
-        metric_fn.add(pred, tgs)
-        # compute PASCAL VOC metric
-        print(f"VOC PASCAL mAP: {metric_fn.value(iou_thresholds=0.5, recall_thresholds=np.arange(0., 1.1, 0.1))['mAP']}")
-        if idx == 10:
-            break
-        
-        # # Now you can work with each batch element
-        # print("Data shape:", data.shape)  # Transformed images after augmentations
-        # print("Target:", target.shape)          # Encoded targets for model
-        # print("Label:", label)            # Original label information
-        # print("Original Data shape:", original_data.shape)  # Untransformed images
-         # Remove this break in actual training loop
-    # for data,target,label,_ in subset:
-    #     obj_classes = utils.load_class_array()
-    #     file = "./output_images"
-    #     utils.plot_boxes(data, target,label, obj_classes, max_overlap=float('inf'), file = file)        
-    #     print(target)
-if __name__ == '__main__':
-    test()
