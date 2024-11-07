@@ -14,20 +14,17 @@ from models.yolov1net_resnet18 import YOLOv1_resnet18
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 class VOCDataset(Dataset):
 
-    def __init__(self, is_train = True, normalize = False):
+    def __init__(self, is_train = True, normalize = False, transform = None, transform_scale_translate = True):
         self.is_train = is_train
         self.normalize = normalize
         self.dataset = VOCDetection(
             root = config.DATA_PATH,
             year = '2007',
             image_set = ("train" if self.is_train else "val"),
-            download = True,
-            transform = T.Compose([
-                T.Resize(config.IMAGE_SIZE),
-                T.ToTensor() 
-            ])
+            download = True
         )
-
+        self.transform = transform
+        self.transform_scale_translate = transform_scale_translate
         self.classes = utils.load_class_dict()
 
         

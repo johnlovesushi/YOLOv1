@@ -21,7 +21,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # print('CUDA current_device: {}'.format(torch.cuda.current_device()))
 # print('CUDA device_count: {}'.format(torch.cuda.device_count()))
 
-
 # Path to data dir.
 image_dir = 'data/VOC_allimgs/'
 
@@ -89,6 +88,12 @@ def check_conv_layers(model):
 def main():
     global best_val_loss
 
+    train_transform = Compose([T.Resize((448, 448)),
+                T.ColorJitter(brightness=[0,1.5], saturation=[0,1.5]),
+                T.ToTensor()])
+
+    test_transform = Compose([T.Resize((448, 448)),
+                T.ToTensor()])
     #print(device)
     yolo = YOLOv1_resnet18().to(device)
 
@@ -118,17 +123,19 @@ def main():
 
         # Train
         train_loss = train(train_loader, yolo, optimizer,  criterion, epoch)
-        train_mAP = utils.evalute_map(train_loader_mAP, yolo, config.CONF_THRESHOLD, config.IOU_THRESHOLD_THRESHOLD)
-        train_loss_lst.append(train_loss.item())
+        train_mAP = utils.evalute_map(train_loader_mAP, yolo, config.CONF_THRESHOLD, config.IOU_THRESHOLD)
+        train_loss_lst.append(train_loss)
         train_mAP_lst.append(train_mAP)
-        
+        print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{train_mAP}]")       
+
         # Validation
         if (epoch+1)%config.VAL_FREQ == 0:
-            test_loss = test(val_loader, yolo, optimizer,  criterion)
-            test_mAP = utils.evalute_map(val_loader_mAP, yolo, config.CONF_THRESHOLD, config.IOU_THRESHOLD_THRESHOLD)
-        
+            val_loss = test(val_loader, yolo, criterion)
+            val_mAP = utils.evalute_map(val_loader_mAP, yolo, config.CONF_THRESHOLD, config.IOU_THRESHOLD)
+            val_loss_lst.append(val_loss)
+            val_mAP_lst.append(val_mAP)
             print(f"Learning Rate:", optimizer.param_groups[0]["lr"])
-            print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{train_mAP}]  Test[Loss:{test_loss} mAP:{test_mAP}]")
+            print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{train_mAP}]  Test[Loss:{val_loss} mAP:{val_mAP}]")
     
 
         # Log validation metrics to TensorBoard
@@ -202,7 +209,8 @@ def test(test_loader, model, loss_f):
             loss = loss_f(preds, tgs)  # Compute the loss
             # optimizer.zero_grad()  # Clear the gradients
             epoch_loss += loss.item()
-    
+
+            del tgs, im, preds
     return epoch_loss/num_batches
 
 def save_checkpoint(state, is_best, log_dir, filename='checkpoint.pth'):
