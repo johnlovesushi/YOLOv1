@@ -59,8 +59,8 @@ class YOLOv1_resnet18(nn.Module):
             nn.Linear(S*S*1024, 4096),
             nn.Dropout(0.5),
             nn.LeakyReLU(0.1),
-            nn.Linear(4096, S * S * (5 * B + C)),
-            nn.Sigmoid()
+            nn.Linear(4096, S * S * (C+ 5 * B )),
+            #nn.Sigmoid()
         ])
     
     def _initial_weight(self):
@@ -76,10 +76,13 @@ class YOLOv1_resnet18(nn.Module):
             elif isinstance(self.yolov1head[i],nn.Linear):
                 nn.init.normal_(self.yolov1head[i].weight, 0, 0.01)
                 nn.init.constant_(self.yolov1head[i].bias, 0)
-    
+
 def test():
     yolo = YOLOv1_resnet18()
     summary(yolo, input_size=(3, 448, 448))
-
+    x = torch.rand(2, 3, 448, 448)
+    xshape = yolo(x).shape
+    print(xshape)
+    return 
 if __name__ == '__main__':
     test()

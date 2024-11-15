@@ -4,7 +4,7 @@ from torch.autograd import Variable
 import shutil
 #from voc import VOCDataset
 from models.yolov1net_resnet18 import YOLOv1_resnet18
-from loss import Loss
+from loss import YoloV1Loss
 from voc import VOCDataset
 import os
 import numpy as np
@@ -12,10 +12,12 @@ import math
 from datetime import datetime
 import config
 from tqdm import tqdm
-from tensorboardX import SummaryWriter
+#from tensorboardX import SummaryWriter
 from torch.utils.data import Subset
+from scale_image import scale_image,scale_translate_bounding_box
 import utils
-
+import torchvision.transforms as T
+from utils import get_bboxes, mean_average_precision as mAP
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #assert device, 'Current implementation does not support CPU mode. Enable CUDA.'
 # print('CUDA current_device: {}'.format(torch.cuda.current_device()))
@@ -35,15 +37,17 @@ checkpoint_path = 'log/model_best.pth'
 tb_log_freq = 5
 
 # Training hyper parameters.
-init_lr = 0.001
+init_lr = 0.00001
 momentum = 0.9
 weight_decay = 5.0e-4
 
 log_dir = './yolo_log'
 accum_iter = 16
 best_val_loss = float('inf')
-writer = SummaryWriter(log_dir=log_dir) 
+# writer = SummaryWriter(log_dir=log_dir) 
 
+use_subset = True
+subset_size = 200
 def update_lr(optimizer, epoch):
 
     for g in optimizer.param_groups:
@@ -85,6 +89,15 @@ def check_conv_layers(model):
         
     return
 
+class Compose(object):
+    def __init__(self, transforms):
+        self.transforms = transforms
+        
+    def __call__(self, img, bboxes):
+        for t in self.transforms:
+            img, bboxes = t(img), bboxes
+        return img, bboxes
+        
 def main():
     global best_val_loss
 
@@ -95,19 +108,23 @@ def main():
     test_transform = Compose([T.Resize((448, 448)),
                 T.ToTensor()])
     #print(device)
-    yolo = YOLOv1_resnet18().to(device)
+    model = YOLOv1_resnet18().to(device)
 
-    criterion = Loss(feature_size=yolo.num_grids)
-    optimizer = torch.optim.SGD(yolo.parameters(), lr=init_lr, momentum=momentum, weight_decay=weight_decay)
-
+    criterion = YoloV1Loss() #feature_size=yolo.num_grids
+    #optimizer = torch.optim.SGD(yolo.parameters(), lr=init_lr, momentum=momentum, weight_decay=weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), lr = init_lr, weight_decay = weight_decay)
     # data loader
-    train_dataset = VOCDataset(is_train = True, normalize = True)
-    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE//accum_iter, shuffle=True, num_workers=config.NUM_WORKERS,drop_last=True,collate_fn=utils.collate_function)
-    train_loader_mAP = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=config.NUM_WORKERS,drop_last=True,collate_fn=utils.collate_function)
+    train_dataset = VOCDataset(is_train = True,transform = train_transform, transform_scale_translate = True)
+    val_dataset = VOCDataset(is_train = False, transform = test_transform, transform_scale_translate = True)
+
+    if use_subset:
+        subset_indices = range(1,subset_size)
+        train_dataset = Subset(train_dataset, subset_indices)
+        val_dataset = Subset(val_dataset, subset_indices)
     
-    val_dataset = VOCDataset(is_train = False, normalize = False)
-    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE//accum_iter, shuffle=False, num_workers=config.NUM_WORKERS,drop_last=True,collate_fn=utils.collate_function)
-    val_loader_mAP = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=config.NUM_WORKERS,drop_last=True,collate_fn=utils.collate_function)
+    train_loader = DataLoader(train_dataset, batch_size=config.BATCH_SIZE//accum_iter, shuffle=True, num_workers=config.NUM_WORKERS,drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=config.BATCH_SIZE//accum_iter, shuffle=False, num_workers=config.NUM_WORKERS,drop_last=True)
+
 
     # initialization
     train_loss_lst = []
@@ -120,23 +137,28 @@ def main():
         
         # update learning rate
         update_lr(optimizer, epoch)
-
+        train_pred_bbox, train_target_bbox = get_bboxes(train_loader, model, iou_threshold = 0.5, 
+                                          threshold = 0.4)
+        test_pred_bbox, test_target_bbox = get_bboxes(val_loader, model, iou_threshold = 0.5, 
+                                          threshold = 0.4)      
         # Train
-        train_loss = train(train_loader, yolo, optimizer,  criterion, epoch)
-        train_mAP = utils.evalute_map(train_loader_mAP, yolo, config.CONF_THRESHOLD, config.IOU_THRESHOLD)
+        train_loss = train(train_loader, model, optimizer,  criterion, epoch)
+        train_mAP = mAP(train_pred_bbox, train_target_bbox)
         train_loss_lst.append(train_loss)
-        train_mAP_lst.append(train_mAP)
-        print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{train_mAP}]")       
+        train_mAP_lst.append(train_mAP.item())
 
-        # Validation
-        if (epoch+1)%config.VAL_FREQ == 0:
-            val_loss = test(val_loader, yolo, criterion)
-            val_mAP = utils.evalute_map(val_loader_mAP, yolo, config.CONF_THRESHOLD, config.IOU_THRESHOLD)
-            val_loss_lst.append(val_loss)
-            val_mAP_lst.append(val_mAP)
-            print(f"Learning Rate:", optimizer.param_groups[0]["lr"])
-            print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{train_mAP}]  Test[Loss:{val_loss} mAP:{val_mAP}]")
-    
+        print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{0.0}]")       
+
+
+        # # Validation
+        # if (epoch+1)%config.VAL_FREQ == 0:
+        val_loss = test(val_loader, model, criterion)
+        val_mAP = mAP(test_pred_bbox, test_target_bbox)
+        val_loss_lst.append(val_loss)
+        val_mAP_lst.append(val_mAP.item())
+        print(f"Learning Rate:", optimizer.param_groups[0]["lr"])
+        print(f"Epoch:{epoch + 1 }  Train[Loss:{train_loss} mAP:{train_mAP.item()}]  Test[Loss:{val_loss} mAP:{val_mAP.item()}]")
+
 
         # Log validation metrics to TensorBoard
         # writer.add_scalar('Val/Loss', avg_val_loss, epoch)
@@ -165,18 +187,17 @@ def train(train_loader, model, optimizer, loss_f, epoch):
     """
     model.train()  # Set the model to training mode for each epoch
     epoch_loss = 0.0  # Initialize the loss for the epoch
-    total_train = 0
-    correct_train = 0
     num_batches = len(train_loader)  # Get the number of batches
     
     with tqdm(total=num_batches, desc=f"Epoch {epoch + 1}/{config.EPOCHS}", unit="batch") as pbar:
-        for batch_idx, (data,targets, filename) in enumerate(train_loader):
-            tgs = torch.cat([target['yolo_targets'].unsqueeze(0).float().to(device)for target in targets], dim=0)
-            im = torch.cat([im.unsqueeze(0).float().to(device) for im in data], dim=0)
-            
+        for batch_idx, (data,targets) in enumerate(train_loader):
+            #tgs = torch.cat([target.unsqueeze(0).float().to(device)for target in targets], dim=0)
+            #im = torch.cat([im.unsqueeze(0).float().to(device) for im in data], dim=0)
+            # print(type(data), data.shape)
+            # print(type(targets), targets.shape)
             with torch.set_grad_enabled(True):
-                preds = model(im)
-                loss = loss_f(preds, tgs)  # Compute the loss
+                preds = model(data)
+                loss = loss_f(preds, targets)  # Compute the loss
                 # optimizer.zero_grad()  # Clear the gradients
                 epoch_loss += loss.item()
                 loss.backward()  # Backpropagation
@@ -201,16 +222,16 @@ def test(test_loader, model, loss_f):
     model.eval()
     num_batches = len(test_loader)
     with torch.no_grad():
-        for batch_idx, (data,targets, filename) in enumerate(test_loader):
-            tgs = torch.cat([target['yolo_targets'].unsqueeze(0).float().to(device)for target in targets], dim=0)
-            im = torch.cat([im.unsqueeze(0).float().to(device) for im in data], dim=0)
-            
-            preds = model(im)
-            loss = loss_f(preds, tgs)  # Compute the loss
+        for batch_idx, (data,targets) in enumerate(test_loader):
+            # tgs = torch.cat([target.unsqueeze(0).float().to(device)for target in targets], dim=0)
+            # im = torch.cat([im.unsqueeze(0).float().to(device) for im in data], dim=0)
+
+            preds = model(data)
+            loss = loss_f(preds,targets)  # Compute the loss
             # optimizer.zero_grad()  # Clear the gradients
             epoch_loss += loss.item()
 
-            del tgs, im, preds
+            del data, targets, preds
     return epoch_loss/num_batches
 
 def save_checkpoint(state, is_best, log_dir, filename='checkpoint.pth'):
