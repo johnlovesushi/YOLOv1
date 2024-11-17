@@ -57,15 +57,15 @@ class VOCDataset(Dataset):
         scaled_bboxes_xywh_tensor = bboxes_xywh_tensor/torch.tensor([w,h,w,h], dtype = torch.float32).expand_as(bboxes_xyxy_tensor)
         scaled_bboxes_xyxy_tensor = bboxes_xyxy_tensor/torch.tensor([w,h,w,h], dtype = torch.float32).expand_as(bboxes_xyxy_tensor)      
         if self.transform_scale_translate == True:
-            img_scale_trans, transform_vals = scale_image(image)
+            image, transform_vals = scale_image(image)
             scaled_bboxes_xywh_tensor = scale_translate_bounding_box(scaled_bboxes_xywh_tensor, transform_vals)
         
         if self.transform:
-            data, scaled_bboxes_xywh_tensor = self.transform(img_scale_trans, scaled_bboxes_xywh_tensor)
+            data, scaled_bboxes_xywh_tensor = self.transform(image, scaled_bboxes_xywh_tensor)
 
 
         targets = self._encode(scaled_bboxes_xywh_tensor, labels_tensor)
-        return data, targets#file_name #label
+        return data, targets, file_name #label
     
     def _encode(self, scaled_bboxes, label):
 

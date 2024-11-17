@@ -170,14 +170,14 @@ def get_overlap(a, b):
     ).item()
 
 
-def plot_boxes(data, targets, labels,classes, color='orange', min_confidence=0.2, max_overlap=0.5, file=None, output_folder = "./output_images"):
+def plot_boxes(data, targets, classes, color='orange', min_confidence=0.2, max_overlap=0.5, file=None, output_folder = "./output/"):
     """Plots bounding boxes on the given image."""
 
     grid_size_x = data.size(dim=2) / config.S
     grid_size_y = data.size(dim=1) / config.S
     m = targets.size(dim=0)
     n = targets.size(dim=1)
-    image_name = labels['annotation']['filename']
+    #image_name = labels['annotation']['filename']
     bboxes = []
     for i in range(m):
         for j in range(n):
@@ -186,15 +186,17 @@ def plot_boxes(data, targets, labels,classes, color='orange', min_confidence=0.2
                 bbox_end = 5 * (k + 1) + config.C
                 bbox = targets[i, j, bbox_start:bbox_end]
                 class_index = torch.argmax(targets[i, j, :config.C]).item()
-                confidence = targets[i, j, class_index].item() * bbox[4].item()          # pr(c) * IOU
+                confidence = targets[i, j, class_index].item() * bbox[0].item()          # pr(c) * IOU
                 if confidence > min_confidence:
-                    width = bbox[2] * config.IMAGE_SIZE[0]
-                    height = bbox[3] * config.IMAGE_SIZE[1]
-                    tl = (
-                        bbox[0] * config.IMAGE_SIZE[0] + j * grid_size_x - width / 2,
-                        bbox[1] * config.IMAGE_SIZE[1] + i * grid_size_y - height / 2
-                    )
-                    bboxes.append([tl, width, height, confidence, class_index])
+                    print(bbox,j,i)
+                    width = bbox[3] * grid_size_x
+                    height = bbox[4] * grid_size_y
+                    lt = (
+                        bbox[1] *  grid_size_y + j * grid_size_y - height / 2,
+                        bbox[0] *  grid_size_x + i * grid_size_x - width / 2 #config.IMAGE_SIZE[0]
+                         #config.IMAGE_SIZE[0]
+                    )           # top left
+                    bboxes.append([lt, width, height, confidence, class_index])
 
     # Sort by highest to lowest confidence
     bboxes = sorted(bboxes, key=lambda x: x[3], reverse=True)
@@ -206,13 +208,14 @@ def plot_boxes(data, targets, labels,classes, color='orange', min_confidence=0.2
         for j in range(num_boxes):
             iou[i][j] = get_overlap(bboxes[i], bboxes[j])
 
+    print(bboxes)
     # Non-maximum suppression and render image
     image = T.ToPILImage()(data)
     draw = ImageDraw.Draw(image)
     discarded = set()
     for i in range(num_boxes):
         if i not in discarded:
-            tl, width, height, confidence, class_index = bboxes[i]
+            lt, width, height, confidence, class_index = bboxes[i]
 
             # Decrease confidence of other conflicting bboxes
             for j in range(num_boxes):
@@ -221,8 +224,9 @@ def plot_boxes(data, targets, labels,classes, color='orange', min_confidence=0.2
                     discarded.add(j)
 
             # Annotate image
-            draw.rectangle((tl, (tl[0] + width, tl[1] + height)), outline='orange')
-            text_pos = (max(0, tl[0]), max(0, tl[1] - 11))
+            print(lt, (lt[0] + height, lt[1] + width))
+            draw.rectangle((lt, (lt[0] + height, lt[1] + width)), outline='orange')
+            text_pos = (max(0, lt[0]), max(0, lt[1] - 11))
             text = f'{classes[class_index]} {round(confidence * 100, 1)}%'
             text_bbox = draw.textbbox(text_pos, text)
             draw.rectangle(text_bbox, fill='orange')
