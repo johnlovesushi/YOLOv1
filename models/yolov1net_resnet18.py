@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from torchvision.models import resnet18, ResNet18_Weights
 import torch.nn.functional as F
-from torchsummary import summary
+
 
 
 class YOLOv1_resnet18(nn.Module):
@@ -25,7 +25,7 @@ class YOLOv1_resnet18(nn.Module):
         S,B,C = self.num_grids,self.num_bboxes,self.num_classes
         output = self.resnet18backbone(x)
         output = self.yolov1head(output)
-        return output.view(-1,S,S,5*B + C)
+        return output.view(-1,S,S,C + 5*B)
     
     def _make_conv_layers(self,batch_norm):
         layers = []
@@ -59,7 +59,7 @@ class YOLOv1_resnet18(nn.Module):
             nn.Linear(S*S*1024, 4096),
             nn.Dropout(0.5),
             nn.LeakyReLU(0.1),
-            nn.Linear(4096, S * S * (C+ 5 * B )),
+            nn.Linear(4096, S * S * (C + 5 * B )),
             #nn.Sigmoid()
         ])
     
@@ -78,10 +78,11 @@ class YOLOv1_resnet18(nn.Module):
                 nn.init.constant_(self.yolov1head[i].bias, 0)
 
 def test():
-    yolo = YOLOv1_resnet18()
-    summary(yolo, input_size=(3, 448, 448))
+    from torchsummary import summary
+    model = YOLOv1_resnet18()
+    summary(model, input_size=(3, 448, 448))
     x = torch.rand(2, 3, 448, 448)
-    xshape = yolo(x).shape
+    xshape = model(x).shape
     print(xshape)
     return 
 if __name__ == '__main__':

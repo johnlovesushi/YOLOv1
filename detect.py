@@ -47,7 +47,7 @@ if __name__ == '__main__':
     test_transform = T.Compose([T.ToTensor()])
     train_dataset = VOCDataset(is_train = True, transform= train_transform,transform_scale_translate = False)
     #train_dataset = VOCDataset(is_train = True,transform = train_transform, transform_scale_translate = True)
-    subset_size = 2
+    subset_size = 10
     dataset_size = len(train_dataset)
     subset_indices = range(1,subset_size)
     subset = Subset(train_dataset, subset_indices)
@@ -73,7 +73,7 @@ if __name__ == '__main__':
         print("data",data.shape)
         print("target",target)
         print(data.shape)
-        plot_boxes(data, target, classes)
+        plot_boxes(data, target, classes,file = file_name)
         #true_bboxes = convert_bboxes_to_list(target)
         #print(true_bboxes)
     model = YOLOv1_resnet18()
