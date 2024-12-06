@@ -188,14 +188,12 @@ def plot_boxes(data, targets, classes, color='orange', min_confidence=0.2, max_o
                 class_index = torch.argmax(targets[i, j, :config.C]).item()
                 confidence = targets[i, j, class_index].item() * bbox[0].item()          # pr(c) * IOU
                 if confidence > min_confidence:
-                    print(bbox,j,i)
                     width = bbox[3] * grid_size_x
                     height = bbox[4] * grid_size_y
                     lt = (
                         bbox[1] *  grid_size_y + j * grid_size_y - height / 2,
-                        bbox[0] *  grid_size_x + i * grid_size_x - width / 2 #config.IMAGE_SIZE[0]
-                         #config.IMAGE_SIZE[0]
-                    )           # top left
+                        bbox[2] *  grid_size_x + i * grid_size_x - width / 2 
+                    )          
                     bboxes.append([lt, width, height, confidence, class_index])
 
     # Sort by highest to lowest confidence
@@ -224,7 +222,6 @@ def plot_boxes(data, targets, classes, color='orange', min_confidence=0.2, max_o
                     discarded.add(j)
 
             # Annotate image
-            print(lt, (lt[0] + height, lt[1] + width))
             draw.rectangle((lt, (lt[0] + height, lt[1] + width)), outline='orange')
             text_pos = (max(0, lt[0]), max(0, lt[1] - 11))
             text = f'{classes[class_index]} {round(confidence * 100, 1)}%'
@@ -234,10 +231,10 @@ def plot_boxes(data, targets, classes, color='orange', min_confidence=0.2, max_o
     if file is None:
         image.show()
     else:
-        if not os.path.exists(file):
-            os.makedirs(file)
+        if not os.path.exists(output_folder):
+            os.makedirs(output_folder)
         # if not file.endswith('.png'):
-        img_save_path = os.path.join(file, f"modified_{image_name}")
+        img_save_path = os.path.join(output_folder, f"modified_{file}")
         print(img_save_path)
         image.save(img_save_path)
 

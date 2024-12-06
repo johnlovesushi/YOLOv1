@@ -24,7 +24,7 @@ class YOLOv1(nn.Module):
         output = self.conv_layers(output)
         output = self.fc_layers(output)
 
-        return output.view(-1,S,S,5*B + C)
+        return output.view(-1,S,S,C + 5*B)
     
     def _make_conv_layers(self,batch_norm):
         layers = []
@@ -56,7 +56,7 @@ class YOLOv1(nn.Module):
             nn.Flatten(),
             nn.Linear(7*7*1024, 4096),
             nn.LeakyReLU(0.1),
-            nn.Linear(4096, S * S * (5 * B + C)),
+            nn.Linear(4096, S * S * (C + 5 * B )),
             nn.Sigmoid()
         ])
     

@@ -55,13 +55,6 @@ if __name__ == '__main__':
     train_loader = DataLoader(dataset = subset, batch_size = 1, 
                               num_workers = 0, shuffle = False)
     
-    # for batch_id, (data,target,file_name) in enumerate(train_loader):
-    #     print("file_name",file_name)
-    #     print("target",target.shape)
-        
-    #     true_bboxes = convert_bboxes_to_list(target)
-
-    #     print(true_bboxes)
 
     def get_bboxes_single_image(output):
         pass
