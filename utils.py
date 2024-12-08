@@ -2,13 +2,10 @@ import torch
 import json
 import os
 import config
-# import matplotlib.patches as patches
 import torchvision.transforms as T
 from PIL import ImageDraw, ImageFont
-# from matplotlib import pyplot as plt
 from collections import Counter
 import numpy as np
-from mean_average_precision import MetricBuilder
 
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 def compute_iou( p,a):
@@ -170,8 +167,20 @@ def get_overlap(a, b):
     ).item()
 
 
-def plot_boxes(data, targets, classes, color='orange', min_confidence=0.2, max_overlap=0.5, file=None, output_folder = "./output/"):
-    """Plots bounding boxes on the given image."""
+def plot_boxes(data, targets, classes, color='orange', min_confidence=0.5, max_overlap=0.5, file_name=None, output_path = "./output/"):
+    """Plots bounding boxes on the given image based on the output from the model
+    @params:
+        data(Tensor): the original image data in 3 dimension ([3,448,448])
+        targets(Tensor): the results generated from the model
+        classes(list): the list of classes
+        color(str): bounding box color, default as organe
+        min_confidence(float): minimum confidence that allows the bounding boxes
+        max_overlap (float): max IOU between two bounding boxes. Otherwise, the one with lower confidence will be discarded
+        file_name (str): image name
+        output_path (str): output path
+    @return:
+        none
+    """
 
     grid_size_x = data.size(dim=2) / config.S
     grid_size_y = data.size(dim=1) / config.S
@@ -228,25 +237,29 @@ def plot_boxes(data, targets, classes, color='orange', min_confidence=0.2, max_o
             text_bbox = draw.textbbox(text_pos, text)
             draw.rectangle(text_bbox, fill='orange')
             draw.text(text_pos, text)
-    if file is None:
+    if file_name is None:
         image.show()
     else:
-        if not os.path.exists(output_folder):
-            os.makedirs(output_folder)
+        if not os.path.exists(output_path):
+            os.makedirs(output_path)
         # if not file.endswith('.png'):
-        img_save_path = os.path.join(output_folder, f"modified_{file}")
+        img_save_path = os.path.join(output_path, f"modified_{file_name}")
         print(img_save_path)
         image.save(img_save_path)
+    
+    return
 
 def intersec_over_union(bboxes_preds, bboxes_targets, boxformat = "midpoints"):    
     """
     Calculates intersection of unions (IoU).
-    Input: Boundbing box predictions (tensor) x1, x2, y1, y2 of shape (N , 4)
+    @params: 
+            Boundbing box predictions (tensor) x1, x2, y1, y2 of shape (N , 4)
             with N denoting the number of bounding boxes.
             Bounding box target/ground truth (tensor) x1, x2, y1, y2 of shape (N, 4).
             box format whether midpoint location or corner location of bounding boxes
             are used.
-    Output: Intersection over union (tensor).
+    @return: 
+            Intersection over union (tensor).
     """
     
     if boxformat == "midpoints":
@@ -329,13 +342,13 @@ def non_max_suppression(bboxes, iou_threshold, threshold, boxformat="corners"):
     """
     1.NMS sets a confidence thresholds, discarding boxes below that threshold.
     2.sorted by confidence score, and then go over the rest of bboxes and get rid of those which has a IOU greater than the threshold
-    Parameters:
+    @params:
         bboxes (list): list of lists containing all bboxes with each sample
         specified as [class_pred, prob_score, x1, y1, x2, y2]
         iou_threshold (float): threshold where predicted bboxes is correct 
         threshold (float): threshold to remove predicted bboxes (independent of IoU) 
         box_format (str): "midpoint" or "corners" used to specify bboxes
-    Returns:
+    @returns:
         list: bboxes after performing NMS given a specific IoU threshold
     """
 
@@ -401,12 +414,6 @@ def convert_target_to_certain_format(boxes,labels,difficult):
 def collate_function(data):
     return list(zip(*data))
 
-# def load_model_and_dataset(model):
-#     # load dataset
-#     test_dataset = VOCDataset(is_train = False)
-#     test_dataloader = DataLoader(test_dataset, shuffle = False, batch_size = 1, collate_fn = collate_function)
-
-
 def convert_bboxes_entire_img_ratios(yolo_output, S = 7):
     """
     convert yolo output bounding boxes into the entire images ratio
@@ -421,8 +428,9 @@ def convert_bboxes_entire_img_ratios(yolo_output, S = 7):
     best_scores = scores.argmax(0).unsqueeze(-1)                    #[batch_size,S,S,1]
     best_boxes = bbox1 * (1-best_scores) + bbox2 * best_scores      # [batch_size, S,S, 4]
     # convert x,y,w,h to entire image ratio
-    cell_indices = torch.arange(7).repeat(batch_size, 7, 1).unsqueeze(-1)  # [batch_size, S,S, 1]
+    cell_indices = torch.arange(7).repeat(batch_size, 7, 1).unsqueeze(-1).to(device)  # [batch_size, S,S, 1]
     # [coord_y,coord_x,  20]
+    print(best_boxes.device, cell_indices.device)
     x = 1 / S * (best_boxes[..., :1] + cell_indices)
     y = 1 / S * (best_boxes[..., 1:2] + cell_indices.permute(0, 2, 1, 3))
     w_h = 1 / S * best_boxes[..., 2:4]
@@ -452,7 +460,7 @@ def get_bboxes(loader,model, iou_threshold = 0.5, threshold = 0.4,boxformat="mid
         loader
         model
     output:
-        batch_pred_bboxes: lsit
+        batch_pred_bboxes: list
         batch_true_bboxes: list
     """
     batch_true_bboxes = []

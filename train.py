@@ -1,4 +1,5 @@
 import torch
+import os
 from torch.utils.data import DataLoader
 from loss import YoloV1Loss
 from voc import VOCDataset
@@ -18,9 +19,9 @@ accum_iter = 16
 weight_decay = 0.0005
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-model_name_dict = {'vgg19bn': lambda: YOLOv1_vgg19bn().to(device),
-                   'resnet18bn': lambda: YOLOv1_resnet18().to(device),
-                   'resnet50bn': lambda: YOLOv1_resnet50().to(device)
+model_name_dict = {'vgg19bn': lambda: YOLOv1_vgg19bn(),
+                   'resnet18bn': lambda: YOLOv1_resnet18(),
+                   'resnet50bn': lambda: YOLOv1_resnet50()
                    }
 
 last_epoch = 0              # used for continue training
@@ -104,14 +105,14 @@ def main():
     # initialization
     if args.model_name in model_name_dict:
         # Call the corresponding function
-        model = model_name_dict[args.model_name]()
+        model = model_name_dict[args.model_name]().to(device)
         print(f"Initialized Model: {args.model_name}")
     else:
         raise ValueError(
             f"Invalid model name: {args.model_name}. Choose from {list(model_name_dict.keys())}")
 
     path_cpt_file = f'cpts/yolov1net_{args.model_name}.cpt'
-
+    os.makedirs(os.path.dirname(path_cpt_file), exist_ok=True)
     train_transform = Compose([T.Resize((448, 448)),
                                T.ColorJitter(
                                    brightness=[0, 1.5], saturation=[0, 1.5]),
@@ -167,8 +168,8 @@ def main():
         val_loss_lst.append(val_loss)
         val_mAP_lst.append(val_mAP.item())
         print(
-            f"Epoch:{epoch + 1}  Learning Rate:{optimizer.param_groups[0]["lr"]} Train[Loss:{train_loss} mAP:{train_mAP.item()}]  Test[Loss:{val_loss} mAP:{val_mAP.item()}]")
-
+            f"Epoch:{epoch + 1}  Learning Rate:{optimizer.param_groups[0]['lr']} Train[Loss:{train_loss} mAP:{train_mAP.item()}]  Test[Loss:{val_loss} mAP:{val_mAP.item()}]"
+        )
         if args.save_model and (((epoch + last_epoch + 1) % 2) == 0 or epoch + last_epoch == config.WARMUP_EPOCHS + config.EPOCHS - 1):
             state = {
                 "epoch": epoch + last_epoch,
@@ -205,7 +206,8 @@ def train(train_loader, model, optimizer, loss_f, epoch):
 
     with tqdm(total=num_batches, desc=f"Epoch {epoch + 1}/{config.EPOCHS}", unit="batch") as pbar:
         for batch_idx, (data, targets) in enumerate(train_loader):
-
+            data = data.to(device)
+            targets = targets.to(device)
             with torch.set_grad_enabled(True):
                 preds = model(data)
                 loss = loss_f(preds, targets)  # Compute the loss
@@ -238,6 +240,8 @@ def test(test_loader, model, loss_f):
     num_batches = len(test_loader)
     with torch.no_grad():
         for batch_idx, (data, targets) in enumerate(test_loader):
+            data = data.to(device)
+            targets = targets.to(device)
             preds = model(data)
             loss = loss_f(preds, targets)  # Compute the loss
             epoch_loss += loss.item()
